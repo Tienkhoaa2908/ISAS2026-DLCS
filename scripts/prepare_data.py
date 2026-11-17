@@ -3,20 +3,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import shutil
-import tempfile
 import zipfile
 from pathlib import Path
 
-REQUIRED_PRIVATE = {
-    'data/derived/train_fingerprints.csv': 'train_fingerprints.csv',
-    'data/derived/5f_ble_merged_clean(friend_data).csv': '5f_ble_merged_clean(friend_data).csv',
-    'data/derived/BLE_processed.csv': 'BLE_processed.csv',
-    'data/labels/user_97.csv': 'user_97.csv',
-    'data/labels/5f_label_loc_train.csv': '5f_label_loc_train.csv',
-    'data/test/BLE_Test_predict.csv': 'BLE_Test_predict.csv',
-    'data/cache/cache_oof_train_fingerprints_stack_rf_r10_f5_proba.npz':
-        'explore_temporal_smoothing/cache_oof_train_fingerprints_stack_rf_r10_f5_proba.npz',
+from private_paths import REPO_ROOT, outside_repo, private_root
+
+ROLE_OUTPUTS = {
+    'training_fingerprints': 'train_fingerprints.csv',
+    'room_labeled_ble_events': 'room_labeled_ble_events.csv',
+    'processed_ble_events': 'processed_ble_events.csv',
+    'fingerprint_location_intervals': 'fingerprint_location_intervals.csv',
+    'source_location_labels': 'source_location_labels.csv',
+    'inference_ble_events': 'inference_ble_events.csv',
+    'cached_oof_probabilities': 'cache/oof_probabilities.npz',
 }
 
 EXPECTED_FINGERPRINT_SHA256 = 'd95ce428732af277c74bf8bd3fb16301c9aaeddbbb1c46a6b394905bfe5b3877'
@@ -44,31 +45,45 @@ def copy_sources(repo: Path, runtime: Path) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description='Prepare the private challenge data for the reproducibility scripts.')
-    ap.add_argument('--archive', type=Path, required=True, help='Private data.zip distributed separately from GitHub.')
-    ap.add_argument('--out', type=Path, default=Path('runtime/Dataset'))
+    ap = argparse.ArgumentParser(description='Prepare the input archive for the reproducibility scripts.')
+    ap.add_argument('--archive', type=Path, required=True, help='Input archive distributed separately from GitHub.')
+    ap.add_argument(
+        '--manifest', type=Path, required=True,
+        help='Local JSON mapping each logical input role to its archive member path.',
+    )
+    ap.add_argument('--out', type=Path, help='Prepared dataset directory outside the repository worktree.')
     args = ap.parse_args()
 
-    repo = Path(__file__).resolve().parent.parent
-    archive = args.archive.resolve()
-    out = args.out.resolve()
+    repo = REPO_ROOT
+    try:
+        archive = outside_repo(args.archive, '--archive')
+        manifest_path = outside_repo(args.manifest, '--manifest')
+        out = outside_repo(args.out or private_root() / 'Dataset', '--out')
+    except ValueError as error:
+        ap.error(str(error))
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+
+    if not isinstance(manifest, dict) or set(manifest) != set(ROLE_OUTPUTS):
+        missing = sorted(set(ROLE_OUTPUTS) - set(manifest)) if isinstance(manifest, dict) else sorted(ROLE_OUTPUTS)
+        extra = sorted(set(manifest) - set(ROLE_OUTPUTS)) if isinstance(manifest, dict) else []
+        raise ValueError(f'Manifest roles must match the required logical inputs; missing={missing}, extra={extra}')
+    if any(not isinstance(member, str) or not member.strip() for member in manifest.values()):
+        raise ValueError('Every manifest role must map to a non-empty archive member path.')
 
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
 
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        with zipfile.ZipFile(archive) as z:
-            names = set(z.namelist())
-            missing = [name for name in REQUIRED_PRIVATE if name not in names]
-            if missing:
-                raise FileNotFoundError('Private archive is missing:\n' + '\n'.join(missing))
-            for member, rel in REQUIRED_PRIVATE.items():
-                z.extract(member, tmp)
-                dst = out / rel
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(tmp / member, dst)
+    with zipfile.ZipFile(archive) as z:
+        names = set(z.namelist())
+        missing = [role for role, member in manifest.items() if member not in names]
+        if missing:
+            raise FileNotFoundError('Archive is missing members for logical roles: ' + ', '.join(missing))
+        for role, member in manifest.items():
+            dst = out / ROLE_OUTPUTS[role]
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(member) as source, dst.open('wb') as target:
+                shutil.copyfileobj(source, target)
 
     copy_sources(repo, out)
 

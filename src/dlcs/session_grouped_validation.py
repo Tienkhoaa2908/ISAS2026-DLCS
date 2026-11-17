@@ -68,7 +68,7 @@ def prepare_dataset(total_zip: Path, outdir: Path) -> Path:
 
     required = [
         dataset_root / "train_fingerprints.csv",
-        dataset_root / "5f_ble_merged_clean(friend_data).csv",
+        dataset_root / "room_labeled_ble_events.csv",
         dataset_root / "model_core.py",
         dataset_root / "models" / "train_resample.py",
     ]

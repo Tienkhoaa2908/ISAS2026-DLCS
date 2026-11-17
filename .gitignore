@@ -1,4 +1,5 @@
 # Private challenge data
+data_manifest.json
 data/
 *.zip
 

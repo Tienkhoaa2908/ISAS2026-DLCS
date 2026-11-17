@@ -83,7 +83,7 @@ def extract_119_features(group, rssi_columns, prefix=''):
 
 
 def load_sparse_ble(dataset_root: Path):
-    frame = pd.read_csv(dataset_root / '5f_ble_merged_clean(friend_data).csv')
+    frame = pd.read_csv(dataset_root / 'room_labeled_ble_events.csv')
     frame['room'] = frame['room_class'].map(normalize_room_label)
     frame['timestamp'] = pd.to_datetime(frame['date'].astype(str) + ' ' + frame['time'].astype(str))
     return frame.sort_values('timestamp').reset_index(drop=True)

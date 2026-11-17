@@ -7,18 +7,22 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from private_paths import outside_repo, private_root
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description='Run the locked repeated session-grouped DLCS confirmation.')
     ap.add_argument('--data-root', type=Path, required=True)
-    ap.add_argument('--outdir', type=Path, default=Path('runtime/session_grouped'))
+    ap.add_argument('--outdir', type=Path, help='Validation outputs outside the repository worktree.')
     ap.add_argument('--trees', type=int, default=1200)
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    data_root = args.data_root.resolve()
-    outdir = args.outdir.resolve()
+    try:
+        data_root = outside_repo(args.data_root, '--data-root')
+        outdir = outside_repo(args.outdir or private_root() / 'session_grouped', '--outdir')
+    except ValueError as error:
+        ap.error(str(error))
     outdir.mkdir(parents=True, exist_ok=True)
 
     total_zip = outdir.parent / 'dataset_runtime.zip'

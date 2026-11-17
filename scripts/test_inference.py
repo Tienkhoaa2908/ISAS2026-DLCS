@@ -4,6 +4,7 @@ import argparse, importlib.util, hashlib, subprocess, sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from private_paths import outside_repo, private_root
 
 EXPECTED_SHA256 = '4b1a80a214b53b531a40467a515e2afbe4350b7b0533144ec1415c3eb9a43d80'
 
@@ -20,9 +21,16 @@ def hms_to_seconds(series: pd.Series) -> np.ndarray:
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--data-root',type=Path,required=True)
-    ap.add_argument('--out',type=Path,default=Path('SQ3K_prediction.csv'))
-    ap.add_argument('--workdir',type=Path,default=Path('runtime/test_inference'))
-    a=ap.parse_args(); root=a.data_root.resolve(); a.workdir.mkdir(parents=True,exist_ok=True); a.out.parent.mkdir(parents=True,exist_ok=True)
+    ap.add_argument('--out',type=Path,help='Submission CSV outside the repository worktree.')
+    ap.add_argument('--workdir',type=Path,help='Inference intermediates directory outside the repository worktree.')
+    a=ap.parse_args()
+    try:
+        root=outside_repo(a.data_root,'--data-root')
+        workdir=outside_repo(a.workdir or private_root()/'test_inference','--workdir')
+        output_path=outside_repo(a.out or workdir/'submission.csv','--out')
+    except ValueError as error:
+        ap.error(str(error))
+    workdir.mkdir(parents=True,exist_ok=True); output_path.parent.mkdir(parents=True,exist_ok=True)
 
     for p in [root,root/'models',root/'explore_method_resample',root/'explore_temporal_smoothing']:
         sys.path.insert(0,str(p))
@@ -32,11 +40,11 @@ def main():
 
     train=pd.read_csv(root/'train_fingerprints.csv'); label_col=model_core.pick_label_column(train,None); feat_cols,_=model_core.select_features(train,label_col,[],0.5)
     Xtrain=train[feat_cols].apply(pd.to_numeric,errors='coerce'); y=train[label_col].astype(str); classes=sorted(y.unique()); c2i={c:i for i,c in enumerate(classes)}
-    raw=pd.read_csv(root/'BLE_Test_predict.csv'); ts=pd.to_datetime(raw['timestamp'],errors='raise')
+    raw=pd.read_csv(root/'inference_ble_events.csv'); ts=pd.to_datetime(raw['timestamp'],errors='raise')
     processed=pd.DataFrame({'date':ts.dt.strftime('%Y-%m-%d'),'time':ts.dt.strftime('%H:%M:%S.%f').str.rstrip('0').str.rstrip('.'),'beacon':pd.to_numeric(raw['mac address']).astype(int),'rssi':pd.to_numeric(raw['RSSI']).astype(float)})
     days=sorted(processed['date'].unique())
     labels=pd.DataFrame({'date':days,'start_time':['00:00:00']*len(days),'finish_time':['23:59:59.999']*len(days),'room':['DUMMY']*len(days)})
-    proc=a.workdir/'BLE_test_processed.csv'; lab=a.workdir/'dummy_test_labels.csv'; testfp=a.workdir/'test_fingerprints.csv'; processed.to_csv(proc,index=False); labels.to_csv(lab,index=False)
+    proc=workdir/'processed_inference_events.csv'; lab=workdir/'placeholder_location_labels.csv'; testfp=workdir/'inference_fingerprints.csv'; processed.to_csv(proc,index=False); labels.to_csv(lab,index=False)
     cmd=[sys.executable,str(root/'build_fingerprints.py'),'-i',str(proc),'-l',str(lab),'-o',str(testfp),'--window','10','--step','2','--features','mean,present,std,max,count','--past-context','8','--past-feats','count,std']
     subprocess.run(cmd,check=True)
     tf=pd.read_csv(testfp); Xtest=tf[feat_cols].apply(pd.to_numeric,errors='coerce')
@@ -57,6 +65,6 @@ def main():
         right=np.clip(np.searchsorted(mids,vals),0,len(mids)-1); left=np.clip(right-1,0,len(mids)-1); choose=np.abs(vals-mids[left])<=np.abs(vals-mids[right]); loc[ri]=labs[np.where(choose,left,right)]
     out['Location']=loc
     assert len(out)==62222 and out['Location'].notna().all() and set(out['Location']).issubset(set(classes))
-    out.to_csv(a.out,index=False); digest=sha256(a.out)
-    print('windows',len(tf)); print('rows',len(out)); print('sha256',digest); print('matches_locked_submission',digest==EXPECTED_SHA256); print(out['Location'].value_counts().to_string())
+    out.to_csv(output_path,index=False); digest=sha256(output_path)
+    print('windows',len(tf)); print('rows',len(out)); print('sha256',digest); print('matches_locked_submission',digest==EXPECTED_SHA256)
 if __name__=='__main__': main()
